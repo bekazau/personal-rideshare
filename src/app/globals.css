@@ -1,0 +1,16 @@
+@import "tailwindcss";
+
+@theme inline {
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@layer components {
+  .input {
+    @apply w-full rounded-xl bg-neutral-900 border border-neutral-800 px-4 py-3 text-base text-neutral-100 placeholder:text-neutral-600 focus:outline-none focus:border-neutral-600;
+  }
+}
+
+body {
+  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+}
