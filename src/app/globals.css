@@ -9,8 +9,22 @@
   .input {
     @apply w-full rounded-xl bg-neutral-900 border border-neutral-800 px-4 py-3 text-base text-neutral-100 placeholder:text-neutral-600 focus:outline-none focus:border-neutral-600;
   }
+  .pt-safe {
+    padding-top: max(1.5rem, env(safe-area-inset-top));
+  }
+  .pb-safe {
+    padding-bottom: max(1.5rem, env(safe-area-inset-bottom));
+  }
 }
 
 body {
   font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+}
+
+/* Disable horizontal swipe-to-go-back/forward in the PWA. Left-edge swipes
+   are repurposed to open the hamburger menu in AppMenu / RiderMenu. */
+html,
+body {
+  overscroll-behavior-x: contain;
+  touch-action: pan-y;
 }

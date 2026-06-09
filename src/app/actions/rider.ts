@@ -1,12 +1,42 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 
 async function getUserId(): Promise<string | null> {
   const supabase = await createClient();
   const { data: claims } = await supabase.auth.getClaims();
   return claims?.claims?.sub ?? null;
+}
+
+export async function updateRiderName(name: string) {
+  const trimmed = name.trim();
+  if (!trimmed) return { error: "Please enter a name." };
+  if (trimmed.length > 60) return { error: "Name is too long." };
+
+  const userId = await getUserId();
+  if (!userId) return { error: "Not signed in." };
+
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("riders")
+    .update({ display_name: trimmed })
+    .eq("id", userId);
+
+  if (error) return { error: error.message };
+  return { ok: true };
+}
+
+// Heartbeat ping — rider app calls this every ~30s while open. The driver's
+// /driver/riders page reads riders.last_seen_at to show online/offline dots.
+export async function pingRiderSeen() {
+  const userId = await getUserId();
+  if (!userId) return { ok: false };
+  const supabase = await createClient();
+  await supabase
+    .from("riders")
+    .update({ last_seen_at: new Date().toISOString() })
+    .eq("id", userId);
+  return { ok: true };
 }
 
 // Called after the rider lands on /ride/[inviteCode] and signs in.
@@ -17,11 +47,12 @@ export async function claimInvite(inviteCode: string, displayName?: string) {
 
   const supabase = await createClient();
 
-  const { data: driver } = await supabase
-    .from("drivers")
-    .select("id, display_name")
-    .eq("invite_code", inviteCode)
-    .maybeSingle();
+  // RLS on `drivers` doesn't permit an unlinked rider to read by invite_code,
+  // so we go through the SECURITY DEFINER RPC. See migration 0002.
+  const { data: driverRows } = await supabase.rpc("get_driver_by_invite", {
+    p_invite_code: inviteCode,
+  });
+  const driver = Array.isArray(driverRows) ? driverRows[0] : null;
 
   if (!driver) return { error: "Invite link is invalid." };
 
@@ -57,6 +88,8 @@ export async function claimInvite(inviteCode: string, displayName?: string) {
     );
   if (linkErr) return { error: linkErr.message };
 
-  revalidatePath(`/ride/${inviteCode}`);
+  // Note: no revalidatePath here — claimInvite is called from /ride/[inviteCode]/page.tsx
+  // during render, and Next.js 16 disallows calling revalidatePath during render.
+  // The page is `force-dynamic` so there's nothing to invalidate anyway.
   return { ok: true, driverName: driver.display_name };
 }

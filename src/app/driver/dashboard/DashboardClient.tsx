@@ -13,7 +13,7 @@ import {
 import { getBrowserPosition, staleness } from "@/lib/geo";
 import { formatUsd } from "@/lib/fare";
 import { paymentOptionsForDriver } from "@/lib/payments";
-import { signOut } from "@/app/actions/auth";
+import { AppMenu } from "@/components/AppMenu";
 import type {
   DriverRow,
   DriverStatus,
@@ -117,9 +117,15 @@ export function DashboardClient({ driver: initialDriver, initialRides }: Props) 
 
   async function changeStatus(status: DriverStatus) {
     setError(null);
+    // Optimistic update — Realtime confirmation will repaint with server truth.
+    const previous = driver.status;
+    setDriver((d) => ({ ...d, status }));
     startTransition(async () => {
       const r = await setDriverStatus(status);
-      if (r.error) setError(r.error);
+      if (r.error) {
+        setError(r.error);
+        setDriver((d) => ({ ...d, status: previous }));
+      }
     });
   }
 
@@ -148,10 +154,13 @@ export function DashboardClient({ driver: initialDriver, initialRides }: Props) 
   );
 
   return (
-    <main className="flex-1 px-6 py-6 max-w-md mx-auto w-full space-y-6 pb-24">
-      <header className="space-y-1">
-        <p className="text-xs text-neutral-500 uppercase tracking-wider">Driver</p>
-        <h1 className="text-2xl font-semibold">{driver.display_name}</h1>
+    <main className="flex-1 px-6 pt-safe pb-24 max-w-md mx-auto w-full space-y-6">
+      <header className="flex items-start gap-3">
+        <AppMenu />
+        <div className="space-y-1 flex-1">
+          <p className="text-xs text-neutral-500 uppercase tracking-wider">Driver</p>
+          <h1 className="text-2xl font-semibold">{driver.display_name}</h1>
+        </div>
       </header>
 
       <StatusCard driver={driver} pending={pending} onChange={changeStatus} />
@@ -191,20 +200,9 @@ export function DashboardClient({ driver: initialDriver, initialRides }: Props) 
         </section>
       )}
 
-      <section className="rounded-2xl bg-neutral-900 border border-neutral-800 p-4 space-y-2">
-        <p className="text-xs text-neutral-400 uppercase tracking-wider">Your invite link</p>
-        <p className="text-sm font-mono break-all">
-          {typeof window !== "undefined" ? window.location.origin : ""}/ride/{driver.invite_code}
-        </p>
-      </section>
-
       {error && (
         <p className="text-sm text-rose-400 text-center">{error}</p>
       )}
-
-      <form action={signOut}>
-        <button className="text-xs text-neutral-500 underline w-full">Sign out</button>
-      </form>
     </main>
   );
 }
@@ -344,6 +342,10 @@ function ActiveRideCard({
   onAdvance: (next: RideStatus) => void;
 }) {
   const cta = NEXT_LABEL[ride.status as RideStatus];
+  // Pre-pickup phases get a navigate-to-pickup link. Once in_progress, that's
+  // irrelevant — they're already with the rider.
+  const showNavToPickup = ["accepted", "en_route", "arrived"].includes(ride.status);
+  const showNavToDropoff = ride.status === "in_progress" && !!ride.dropoff_address;
   return (
     <section className="rounded-2xl bg-neutral-900 border border-emerald-900/40 p-4 space-y-3">
       <div className="flex justify-between items-start gap-2">
@@ -358,6 +360,22 @@ function ActiveRideCard({
         </div>
         <p className="font-semibold">{formatUsd(ride.total_cents)}</p>
       </div>
+      {showNavToPickup && (
+        <NavigateButton
+          label="Navigate to pickup"
+          lat={ride.pickup_lat}
+          lng={ride.pickup_lng}
+          address={ride.pickup_address}
+        />
+      )}
+      {showNavToDropoff && (
+        <NavigateButton
+          label="Navigate to dropoff"
+          lat={ride.dropoff_lat}
+          lng={ride.dropoff_lng}
+          address={ride.dropoff_address}
+        />
+      )}
       {cta && (
         <button
           onClick={() => onAdvance(cta.next)}
@@ -373,6 +391,40 @@ function ActiveRideCard({
         Cancel this ride
       </button>
     </section>
+  );
+}
+
+function NavigateButton({
+  label,
+  lat,
+  lng,
+  address,
+}: {
+  label: string;
+  lat: number | null;
+  lng: number | null;
+  address: string | null;
+}) {
+  // Prefer coordinates (always unambiguous); fall back to the typed address.
+  const destination = lat != null && lng != null ? `${lat},${lng}` : address;
+  if (!destination) return null;
+
+  // Apple Maps deep-link works native on iOS, falls back to the web on
+  // everywhere else. dirflg=d = driving.
+  const url = `https://maps.apple.com/?daddr=${encodeURIComponent(destination)}&dirflg=d`;
+
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="w-full rounded-xl bg-sky-500 text-neutral-950 py-3 font-medium text-center hover:bg-sky-400 flex items-center justify-center gap-2"
+    >
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M3 11l19-9-9 19-2-8-8-2z" />
+      </svg>
+      {label}
+    </a>
   );
 }
 
@@ -409,3 +461,4 @@ function PaymentRow({
     </div>
   );
 }
+

@@ -73,6 +73,75 @@ export async function completeOnboarding(input: OnboardingInput) {
   return { ok: true, inviteCode };
 }
 
+export interface UpdateSettingsInput {
+  displayName: string;
+  baseFareCents: number;
+  homeRadiusMeters: number;
+  payCashapp: string | null;
+  payVenmo: string | null;
+  payPaypal: string | null;
+  payZelle: string | null;
+  payApplepay: string | null;
+  payCashEnabled: boolean;
+  firstRideFreeOn: boolean;
+  firstRideDiscountPct: number;
+}
+
+export async function updateDriverSettings(input: UpdateSettingsInput) {
+  const userId = await getCurrentUserId();
+  if (!userId) return { error: "Not signed in." };
+
+  if (!input.displayName.trim()) return { error: "Please enter your name." };
+  if (input.baseFareCents < 0) return { error: "Base fare must be ≥ 0." };
+  if (input.homeRadiusMeters < 100 || input.homeRadiusMeters > 5000) {
+    return { error: "Home radius must be between 100 and 5000 meters." };
+  }
+  if (input.firstRideDiscountPct < 1 || input.firstRideDiscountPct > 100) {
+    return { error: "Discount must be between 1 and 100." };
+  }
+
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("drivers")
+    .update({
+      display_name: input.displayName.trim(),
+      base_fare_cents: input.baseFareCents,
+      home_radius_meters: input.homeRadiusMeters,
+      pay_cashapp: input.payCashapp || null,
+      pay_venmo: input.payVenmo || null,
+      pay_paypal: input.payPaypal || null,
+      pay_zelle: input.payZelle || null,
+      pay_applepay: input.payApplepay || null,
+      pay_cash_enabled: input.payCashEnabled,
+      first_ride_free_on: input.firstRideFreeOn,
+      first_ride_discount_pct: input.firstRideDiscountPct,
+    })
+    .eq("id", userId);
+
+  if (error) return { error: error.message };
+  revalidatePath("/driver");
+  return { ok: true };
+}
+
+export async function updateHomeBase(lat: number, lng: number) {
+  const userId = await getCurrentUserId();
+  if (!userId) return { error: "Not signed in." };
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return { error: "Invalid coordinates." };
+  }
+
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("drivers")
+    .update({ home_lat: lat, home_lng: lng })
+    .eq("id", userId);
+
+  if (error) return { error: error.message };
+  revalidatePath("/driver");
+  return { ok: true };
+}
+
 export async function setDriverStatus(status: DriverStatus) {
   const userId = await getCurrentUserId();
   if (!userId) return { error: "Not signed in." };

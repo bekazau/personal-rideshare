@@ -52,6 +52,7 @@ export interface RiderRow {
   id: string;
   display_name: string;
   phone: string | null;
+  last_seen_at: string | null;
   created_at: string;
 }
 
@@ -106,6 +107,16 @@ export interface DriverRiderLinkRow {
   invited_at: string;
 }
 
+export interface MessageRow {
+  id: string;
+  driver_id: string;
+  rider_id: string;
+  sender_role: "driver" | "rider";
+  body: string;
+  created_at: string;
+  read_at: string | null;
+}
+
 type TableShape<Row> = {
   Row: Row;
   Insert: Partial<Row>;
@@ -122,6 +133,7 @@ export interface Database {
       push_subscriptions: TableShape<PushSubscriptionRow>;
       saved_addresses: TableShape<SavedAddressRow>;
       driver_rider_links: TableShape<DriverRiderLinkRow>;
+      messages: TableShape<MessageRow>;
     };
     Views: Record<string, never>;
     Functions: Record<string, never>;

@@ -1,6 +1,25 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
+import { createClient } from "@/lib/supabase/server";
 
-export default function LandingPage() {
+export const dynamic = "force-dynamic";
+
+export default async function LandingPage() {
+  // If a signed-in driver hits "/", route them straight to their dashboard.
+  // The PWA's start_url is "/", so this makes the driver PWA launch directly
+  // into the app instead of the role-pick landing.
+  const supabase = await createClient();
+  const { data: claims } = await supabase.auth.getClaims();
+  const userId = claims?.claims?.sub;
+  if (userId) {
+    const { data: driver } = await supabase
+      .from("drivers")
+      .select("id")
+      .eq("id", userId)
+      .maybeSingle();
+    if (driver) redirect("/driver/dashboard");
+  }
+
   return (
     <main className="flex-1 flex flex-col items-center justify-center px-6 py-12 text-center">
       <div className="max-w-md w-full space-y-8">

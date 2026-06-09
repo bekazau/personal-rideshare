@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { requestRide } from "@/app/actions/ride";
 import {
@@ -10,7 +10,10 @@ import {
 } from "@/lib/push-client";
 import { savePushSubscription } from "@/app/actions/push";
 import { pingDriverForLocationRefreshIfStale } from "@/app/actions/ride";
-import { getBrowserPosition, staleness } from "@/lib/geo";
+import { pingRiderSeen, updateRiderName } from "@/app/actions/rider";
+import { RiderMenu } from "@/components/RiderMenu";
+import { DriverAreaMap } from "@/components/DriverAreaMap";
+import { getBrowserPosition } from "@/lib/geo";
 import { calculateFare, formatUsd } from "@/lib/fare";
 import { TipSelector } from "@/components/TipSelector";
 import { PaymentMenu } from "@/components/PaymentMenu";
@@ -22,6 +25,8 @@ type RiderDriver = Pick<
   | "display_name"
   | "invite_code"
   | "status"
+  | "last_lat"
+  | "last_lng"
   | "last_area_name"
   | "last_location_at"
   | "base_fare_cents"
@@ -35,17 +40,60 @@ type RiderDriver = Pick<
   | "pay_cash_enabled"
 >;
 
+interface RiderSelf {
+  id: string;
+  display_name: string;
+}
+
 interface Props {
   driver: RiderDriver;
+  rider: RiderSelf;
   initialActiveRide: RideRow | null;
 }
 
-export function RiderApp({ driver: initialDriver, initialActiveRide }: Props) {
+export function RiderApp({ driver: initialDriver, rider: initialRider, initialActiveRide }: Props) {
   const supabase = useMemo(() => createClient(), []);
   const [driver, setDriver] = useState<RiderDriver>(initialDriver);
+  const [rider, setRider] = useState<RiderSelf>(initialRider);
   const [activeRide, setActiveRide] = useState<RideRow | null>(initialActiveRide);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+
+  // ----- Heartbeat: ping last_seen_at so driver sees "online" dot ------------
+  useEffect(() => {
+    pingRiderSeen().catch(() => {});
+    const interval = setInterval(() => {
+      if (document.visibilityState === "visible") {
+        pingRiderSeen().catch(() => {});
+      }
+    }, 30_000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") pingRiderSeen().catch(() => {});
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
+
+  // ----- Name edit ------------------------------------------------------------
+  const [nameEditing, setNameEditing] = useState(false);
+  const [nameDraft, setNameDraft] = useState(rider.display_name);
+  const [nameSaving, setNameSaving] = useState(false);
+
+  async function saveName() {
+    setError(null);
+    setNameSaving(true);
+    const result = await updateRiderName(nameDraft);
+    setNameSaving(false);
+    if (result.error) {
+      setError(result.error);
+      return;
+    }
+    setRider((r) => ({ ...r, display_name: nameDraft.trim() }));
+    setNameEditing(false);
+  }
 
   // ----- Realtime: watch driver + active rides --------------------------------
   useEffect(() => {
@@ -85,6 +133,30 @@ export function RiderApp({ driver: initialDriver, initialActiveRide }: Props) {
   useEffect(() => {
     pingDriverForLocationRefreshIfStale(driver.id).catch(() => {});
   }, [driver.id]);
+
+  // ----- Polling fallback for driver state ------------------------------------
+  // Realtime postgres_changes can silently drop on iOS PWA (WebSocket suspends
+  // when backgrounded, RLS quirks, etc). Re-fetch the driver via the RPC every
+  // 15s and instantly when the page becomes visible again.
+  const refreshDriver = useCallback(async () => {
+    const { data } = await supabase.rpc("get_driver_by_invite", {
+      p_invite_code: driver.invite_code,
+    });
+    const next = Array.isArray(data) ? (data[0] as Partial<RiderDriver> | undefined) : undefined;
+    if (next) setDriver((d) => ({ ...d, ...next }));
+  }, [supabase, driver.invite_code]);
+
+  useEffect(() => {
+    const interval = setInterval(refreshDriver, 15_000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") refreshDriver();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [refreshDriver]);
 
   // ----- Push notifications subscription (one-tap opt-in) ---------------------
   const [pushAsked, setPushAsked] = useState(false);
@@ -191,22 +263,79 @@ export function RiderApp({ driver: initialDriver, initialActiveRide }: Props) {
   const showRequestForm = !activeRide || ["completed", "cancelled", "declined"].includes(activeRide.status);
 
   return (
-    <main className="flex-1 px-6 py-6 max-w-md mx-auto w-full space-y-6 pb-24">
-      <header className="space-y-1">
-        <p className="text-xs text-neutral-500 uppercase tracking-wider">Your driver</p>
-        <h1 className="text-2xl font-semibold">{driver.display_name}</h1>
+    <main className="flex-1 px-6 pt-safe pb-24 max-w-md mx-auto w-full space-y-6">
+      <header className="flex items-start gap-3">
+        <RiderMenu inviteCode={driver.invite_code} />
+        <div className="flex-1 space-y-1">
+          <p className="text-xs text-neutral-500 uppercase tracking-wider">Your driver</p>
+          <h1 className="text-2xl font-semibold">{driver.display_name}</h1>
+        </div>
       </header>
 
+      {/* Rider's own name — editable inline */}
+      <section className="rounded-2xl bg-neutral-900 border border-neutral-800 p-4">
+        {nameEditing ? (
+          <div className="space-y-2">
+            <p className="text-xs text-neutral-400 uppercase tracking-wider">Your name</p>
+            <input
+              className="input"
+              value={nameDraft}
+              autoFocus
+              onChange={(e) => setNameDraft(e.target.value)}
+              placeholder="What should your driver call you?"
+            />
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={() => {
+                  setNameEditing(false);
+                  setNameDraft(rider.display_name);
+                }}
+                className="rounded-xl bg-neutral-800 text-neutral-300 py-2 text-sm font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveName}
+                disabled={nameSaving || !nameDraft.trim()}
+                className="rounded-xl bg-white text-neutral-950 py-2 text-sm font-medium disabled:opacity-50"
+              >
+                {nameSaving ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-xs text-neutral-400 uppercase tracking-wider">You</p>
+              <p className="font-medium truncate">{rider.display_name}</p>
+            </div>
+            <button
+              onClick={() => {
+                setNameDraft(rider.display_name);
+                setNameEditing(true);
+              }}
+              className="text-xs text-neutral-400 underline shrink-0"
+            >
+              Edit name
+            </button>
+          </div>
+        )}
+      </section>
+
       {/* Status card */}
-      <section className="rounded-2xl bg-neutral-900 border border-neutral-800 p-4 space-y-1">
+      <section className="rounded-2xl bg-neutral-900 border border-neutral-800 p-4 space-y-3">
         <div className="flex items-center gap-2">
           <span className={`h-3 w-3 rounded-full ${statusDot[driver.status]}`} />
           <span className="font-medium capitalize">{driver.status}</span>
         </div>
-        {driver.status !== "offline" && driver.last_area_name && (
-          <p className="text-xs text-neutral-400">
-            Last seen near {driver.last_area_name} · {staleness(driver.last_location_at)}
-          </p>
+        {driver.status !== "offline" && (
+          <DriverAreaMap
+            lat={driver.last_lat}
+            lng={driver.last_lng}
+            lastSeenAt={driver.last_location_at}
+            areaName={driver.last_area_name}
+            driverName={driver.display_name}
+          />
         )}
       </section>
 

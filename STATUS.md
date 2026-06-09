@@ -127,6 +127,49 @@ The first launch will provision a self-signed cert.
 
 Open [https://localhost:3000](https://localhost:3000).
 
+## Email delivery (avoid Supabase's built-in rate limit)
+
+Supabase's built-in email sender is rate-limited to ~2-4 emails/hour
+project-wide — fine for dev smoke tests, useless for real traffic. The
+first time more than one person hits the magic-link flow you'll see
+`email rate limit exceeded` and signups stall for an hour.
+
+Fix: configure custom SMTP. Recommended for personal use is **Resend**
+(3,000 emails/month free, no card).
+
+1. Sign up at [resend.com](https://resend.com), verify your email.
+2. **API Keys** → Create API Key → copy (`re_...`).
+3. In Supabase Dashboard → Project Settings → Auth → SMTP Settings:
+   - Enable **Custom SMTP**
+   - Host: `smtp.resend.com`
+   - Port: `465` (SSL) or `587` (STARTTLS)
+   - Username: `resend`
+   - Password: the API key from step 2
+   - Sender email: `onboarding@resend.dev` (testing — only delivers to
+     your own verified email address) OR `noreply@yourdomain.com` after
+     verifying a domain in Resend (free, ~5 min of DNS)
+   - Sender name: e.g. `Rideshare`
+4. While there: bump **Authentication → Rate Limits → Emails per hour**
+   to ~100 so retries during testing aren't gated.
+
+Alternatives if Resend doesn't fit: SendGrid (100/day free), AWS SES
+(cheapest at scale, sandbox-by-default), Postmark (best deliverability,
+100/month free).
+
+### Also when going to production
+
+When deploying to Vercel (or any host), three dashboard tweaks are
+required for auth to work off-localhost:
+
+- **Supabase → Authentication → URL Configuration**
+  - Site URL: your production URL (e.g. `https://personal-rideshare.vercel.app`)
+  - Redirect URLs: add `<prod-url>/auth/callback`
+- **Mapbox → Account → Tokens**: edit the token, add URL restriction
+  to your prod URL so a leaked token can't be used elsewhere
+- **Vercel env vars**: all 8 from `.env.local` need to exist in the
+  Production environment, with `NEXT_PUBLIC_APP_URL` overridden to the
+  prod URL (not `localhost`)
+
 ## How to verify end-to-end (steps from the plan)
 
 Use two phones (or two browser profiles) on the same Wi-Fi:

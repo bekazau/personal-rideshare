@@ -36,7 +36,7 @@ const INITIAL: State = {
   pushReady: false,
   homeLat: null,
   homeLng: null,
-  homeRadius: 500,
+  homeRadius: 0.3,
   payCashapp: "",
   payVenmo: "",
   payPaypal: "",
@@ -105,7 +105,7 @@ export function OnboardingWizard({ initialDisplayName }: { initialDisplayName: s
         baseFareCents,
         homeLat: state.homeLat,
         homeLng: state.homeLng,
-        homeRadiusMeters: state.homeRadius,
+        homeRadiusMeters: Math.round(state.homeRadius * 1609.344),
         payCashapp: state.payCashapp || null,
         payVenmo: state.payVenmo || null,
         payPaypal: state.payPaypal || null,
@@ -126,7 +126,7 @@ export function OnboardingWizard({ initialDisplayName }: { initialDisplayName: s
   }
 
   return (
-    <main className="flex-1 flex flex-col px-6 py-8 max-w-md mx-auto w-full">
+    <main className="flex-1 flex flex-col px-6 pt-safe pb-safe max-w-md mx-auto w-full">
       <StepHeader step={step} />
 
       {step === "intro" && (
@@ -191,12 +191,12 @@ export function OnboardingWizard({ initialDisplayName }: { initialDisplayName: s
               Saved: {state.homeLat.toFixed(4)}, {state.homeLng.toFixed(4)}
             </p>
           )}
-          <Field label={`Privacy radius: ${state.homeRadius} meters`}>
+          <Field label={`Privacy radius: ${state.homeRadius.toFixed(1)} mi`}>
             <input
               type="range"
-              min="100"
-              max="2000"
-              step="50"
+              min="0.1"
+              max="3"
+              step="0.1"
               value={state.homeRadius}
               onChange={(e) => update({ homeRadius: Number(e.target.value) })}
               className="w-full"
