@@ -1,8 +1,21 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 
 import { staleness } from "@/lib/geo";
+
+// Returns false during SSR / first render, true once on the client — without a
+// setState-in-effect (which the react-hooks lint rule forbids). Used to render
+// the map tile client-only so its onError handler is attached before the image
+// request fires.
+const emptySubscribe = () => () => {};
+function useMounted() {
+  return useSyncExternalStore(
+    emptySubscribe,
+    () => true,
+    () => false
+  );
+}
 
 interface Props {
   lat: number | null;
@@ -12,13 +25,6 @@ interface Props {
   driverName: string;
 }
 
-// Mapbox Static Images API params. Public dark style; 600x240 @2x is a good
-// retina-crisp banner. Zoom 13 ≈ neighborhood scale (the fuzzy circle
-// overlay implies "somewhere in this area", not an exact point).
-const MAP_W = 600;
-const MAP_H = 240;
-const ZOOM = 13;
-
 export function DriverAreaMap({
   lat,
   lng,
@@ -26,8 +32,13 @@ export function DriverAreaMap({
   areaName,
   driverName,
 }: Props) {
-  const token = process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN;
   const [imgFailed, setImgFailed] = useState(false);
+  // The rider page is force-dynamic, so a server-rendered <img> begins loading
+  // before React hydrates — if it errors in that window, onError never fires
+  // and a broken-image square persists. Rendering the tile client-only
+  // guarantees onError is attached before the request, so a real failure
+  // degrades to the text fallback.
+  const mounted = useMounted();
 
   // Text-only fallback, shared by the no-data path and the image-error path.
   const textFallback = areaName ? (
@@ -36,17 +47,17 @@ export function DriverAreaMap({
     </p>
   ) : null;
 
-  // Fallbacks: if we have no coords or no token, or the static tile failed to
-  // load (e.g. Mapbox 403/rate-limit/offline), fall back to text only.
-  if (lat == null || lng == null || !token || imgFailed) {
+  // Fallbacks: no coords, not yet mounted, or the tile failed to load.
+  if (lat == null || lng == null || !mounted || imgFailed) {
     return textFallback;
   }
 
-  const url =
-    `https://api.mapbox.com/styles/v1/mapbox/dark-v11/static/` +
-    `${lng},${lat},${ZOOM},0/${MAP_W}x${MAP_H}@2x` +
-    `?access_token=${encodeURIComponent(token)}` +
-    `&attribution=false&logo=false`;
+  // Same-origin proxy (see /api/area-map). Keeps the Mapbox token server-side
+  // and avoids cross-origin requests to api.mapbox.com that content blockers
+  // routinely block.
+  const url = `/api/area-map?lat=${encodeURIComponent(
+    lat
+  )}&lng=${encodeURIComponent(lng)}`;
 
   return (
     <div className="relative rounded-2xl overflow-hidden border border-neutral-800">
