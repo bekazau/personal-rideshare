@@ -1,5 +1,37 @@
 import { describe, expect, it, vi } from "vitest";
-import { metersBetween, isInsideHomeZone, staleness } from "./geo";
+import { metersBetween, isInsideHomeZone, staleness, formatGeocodeArea } from "./geo";
+
+describe("formatGeocodeArea", () => {
+  it("appends the US state abbreviation from short_code", () => {
+    expect(
+      formatGeocodeArea({
+        text: "Santa Rosa",
+        context: [
+          { id: "region.123", short_code: "US-CA", text: "California" },
+          { id: "country.456", short_code: "us", text: "United States" },
+        ],
+      })
+    ).toBe("Santa Rosa, CA");
+  });
+
+  it("falls back to the full region name when no short_code", () => {
+    expect(
+      formatGeocodeArea({
+        text: "Anytown",
+        context: [{ id: "region.1", text: "Some Province" }],
+      })
+    ).toBe("Anytown, Some Province");
+  });
+
+  it("returns just the name when there is no region context", () => {
+    expect(formatGeocodeArea({ text: "Lonely Place", context: [] })).toBe("Lonely Place");
+  });
+
+  it("returns null when the feature has no name", () => {
+    expect(formatGeocodeArea({ context: [] })).toBeNull();
+    expect(formatGeocodeArea(undefined)).toBeNull();
+  });
+});
 
 describe("metersBetween", () => {
   it("returns 0 for identical points", () => {

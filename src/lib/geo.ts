@@ -43,7 +43,29 @@ export function getBrowserPosition(options?: PositionOptions): Promise<Geolocati
   });
 }
 
-// Reverse-geocode a lat/lng to a neighborhood-ish name using Mapbox.
+// A single Mapbox geocoding feature (only the fields we read).
+export interface GeocodeFeature {
+  text?: string;
+  // Parent contexts (place, region/state, country). For US results the region
+  // entry carries a `short_code` like "US-CA".
+  context?: { id?: string; short_code?: string; text?: string }[];
+}
+
+// Format a geocode feature as "City, ST" — e.g. "Santa Rosa, CA" — so a
+// rider on a road trip can tell which state the area is in. Falls back to just
+// the place name when no region is available (non-US, missing context, etc.).
+export function formatGeocodeArea(feature: GeocodeFeature | undefined): string | null {
+  const name = feature?.text;
+  if (!name) return null;
+
+  const region = feature?.context?.find((c) => c.id?.startsWith("region"));
+  // "US-CA" -> "CA"; otherwise fall back to the full region name ("California").
+  const state = region?.short_code?.split("-")[1]?.toUpperCase() ?? region?.text;
+
+  return state ? `${name}, ${state}` : name;
+}
+
+// Reverse-geocode a lat/lng to a "City, ST" area name using Mapbox.
 // Server-only — MAPBOX_ACCESS_TOKEN must not be exposed to the client.
 export async function reverseGeocode(
   lat: number,
@@ -56,8 +78,8 @@ export async function reverseGeocode(
   try {
     const res = await fetch(url, { cache: "no-store" });
     if (!res.ok) return null;
-    const data = (await res.json()) as { features?: { text?: string }[] };
-    return data.features?.[0]?.text ?? null;
+    const data = (await res.json()) as { features?: GeocodeFeature[] };
+    return formatGeocodeArea(data.features?.[0]);
   } catch {
     return null;
   }
