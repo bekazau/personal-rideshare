@@ -19,7 +19,9 @@ interface Props {
 // server. Tiles come from the same-origin /api/map-tiles proxy.
 const AREA_RADIUS_M = 800; // the fuzzy "somewhere in here" circle
 const INITIAL_ZOOM = 13;
-const MIN_ZOOM = 9;
+// No zoom-out cap — riders can pull back to the whole world. (1 is the floor
+// because the 512px tiles use zoomOffset -1, so Leaflet zoom 1 = tile z0.)
+const MIN_ZOOM = 1;
 // Privacy cap: keep the view at neighborhood scale so the exact center (the
 // driver's real point) can't be read down to a building. Mirrors MAX_TILE_Z in
 // the proxy (Leaflet zoom = tile z + 1 with zoomOffset -1, so 15 -> tile z14).
@@ -44,9 +46,10 @@ export function AreaMapModal({ lat, lng, areaName, lastSeenAt, onClose }: Props)
         zoom: INITIAL_ZOOM,
         minZoom: MIN_ZOOM,
         maxZoom: MAX_ZOOM,
-        zoomControl: true,
+        zoomControl: false, // re-added bottom-left, clear of the iPhone notch
         attributionControl: true,
       });
+      L.control.zoom({ position: "bottomleft" }).addTo(map);
 
       L.tileLayer("/api/map-tiles/{z}/{x}/{y}", {
         tileSize: 512,
@@ -91,18 +94,25 @@ export function AreaMapModal({ lat, lng, areaName, lastSeenAt, onClose }: Props)
       {/* Map fills the screen */}
       <div ref={containerRef} className="absolute inset-0" />
 
-      {/* Close button */}
+      {/* Close button — offset below the iPhone notch / status bar */}
       <button
         type="button"
         onClick={onClose}
         aria-label="Close map"
-        className="absolute top-4 right-4 z-[1000] h-10 w-10 rounded-full bg-neutral-950/80 text-neutral-100 text-xl leading-none backdrop-blur-sm border border-neutral-700 flex items-center justify-center"
+        style={{
+          top: "calc(env(safe-area-inset-top) + 0.75rem)",
+          right: "calc(env(safe-area-inset-right) + 0.75rem)",
+        }}
+        className="absolute z-[1000] h-11 w-11 rounded-full bg-neutral-950/80 text-neutral-100 text-xl leading-none backdrop-blur-sm border border-neutral-700 flex items-center justify-center"
       >
         ✕
       </button>
 
-      {/* Caption */}
-      <div className="absolute bottom-4 left-4 right-4 z-[1000] flex justify-center pointer-events-none">
+      {/* Caption — kept above the iPhone home indicator */}
+      <div
+        style={{ bottom: "calc(env(safe-area-inset-bottom) + 1rem)" }}
+        className="absolute left-4 right-4 z-[1000] flex justify-center pointer-events-none"
+      >
         <div className="rounded-lg bg-neutral-950/80 backdrop-blur-sm px-3 py-1.5">
           <p className="text-xs text-neutral-200">
             {areaName ? (
