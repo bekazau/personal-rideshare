@@ -85,6 +85,30 @@ export async function reverseGeocode(
   }
 }
 
+// Forward-geocode a free-text address to a coordinate using Mapbox.
+// Server-only — MAPBOX_ACCESS_TOKEN must not be exposed to the client. Used to
+// resolve a rider's pickup/dropoff text into points so the driver can be shown
+// a route map.
+export async function forwardGeocode(query: string): Promise<GeoPoint | null> {
+  const token = process.env.MAPBOX_ACCESS_TOKEN;
+  if (!token || !query.trim()) return null;
+
+  const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(
+    query
+  )}.json?limit=1&access_token=${token}`;
+  try {
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) return null;
+    // Mapbox returns center as [lng, lat].
+    const data = (await res.json()) as { features?: { center?: [number, number] }[] };
+    const center = data.features?.[0]?.center;
+    if (!center || center.length < 2) return null;
+    return { lat: center[1], lng: center[0] };
+  } catch {
+    return null;
+  }
+}
+
 export function staleness(updatedAtIso: string | null): string {
   if (!updatedAtIso) return "never seen";
   const minutes = Math.floor((Date.now() - new Date(updatedAtIso).getTime()) / 60_000);

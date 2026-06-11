@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useSyncExternalStore } from "react";
+import { useState } from "react";
 import dynamic from "next/dynamic";
 
 import { staleness } from "@/lib/geo";
+import { useMounted } from "@/lib/use-mounted";
 
 // Leaflet-based fullscreen map. Loaded only when the rider taps to expand, and
 // never on the server (Leaflet touches `window`).
@@ -11,19 +12,6 @@ const AreaMapModal = dynamic(
   () => import("./AreaMapModal").then((m) => m.AreaMapModal),
   { ssr: false }
 );
-
-// Returns false during SSR / first render, true once on the client — without a
-// setState-in-effect (which the react-hooks lint rule forbids). Used to render
-// the map tile client-only so its onError handler is attached before the image
-// request fires.
-const emptySubscribe = () => () => {};
-function useMounted() {
-  return useSyncExternalStore(
-    emptySubscribe,
-    () => true,
-    () => false
-  );
-}
 
 interface Props {
   lat: number | null;

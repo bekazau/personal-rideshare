@@ -14,6 +14,7 @@ import { getBrowserPosition, staleness } from "@/lib/geo";
 import { formatUsd } from "@/lib/fare";
 import { paymentOptionsForDriver } from "@/lib/payments";
 import { AppMenu } from "@/components/AppMenu";
+import { RouteMap } from "@/components/RouteMap";
 import type {
   DriverRow,
   DriverStatus,
@@ -309,6 +310,9 @@ function PendingRideCard({
           )}
         </div>
       </div>
+      {ride.pickup_lat != null && ride.dropoff_lat != null && (
+        <RouteMap rideId={ride.id} label={ride.pickup_address} />
+      )}
       <div className="grid grid-cols-2 gap-2">
         <button
           onClick={onDecline}
@@ -360,6 +364,9 @@ function ActiveRideCard({
         </div>
         <p className="font-semibold">{formatUsd(ride.total_cents)}</p>
       </div>
+      {ride.pickup_lat != null && ride.dropoff_lat != null && (
+        <RouteMap rideId={ride.id} label={ride.pickup_address} />
+      )}
       {showNavToPickup && (
         <NavigateButton
           label="Navigate to pickup"

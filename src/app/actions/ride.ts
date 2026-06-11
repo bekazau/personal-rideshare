@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { sendPushToUser } from "@/lib/push";
 import { calculateFare } from "@/lib/fare";
+import { forwardGeocode } from "@/lib/geo";
 import type { PaymentMethod, RideStatus } from "@/lib/types/database";
 
 async function getUserId(): Promise<string | null> {
@@ -63,15 +64,41 @@ export async function requestRide(input: RideRequestInput) {
     firstRideDiscountPct: driver.first_ride_discount_pct,
   });
 
+  // Resolve coordinates so the driver can be shown a pickup→dropoff route map.
+  // Pickup may already have exact coords (rider tapped "use my current
+  // location"); otherwise geocode the typed address. Dropoff is text-only, so
+  // geocode it when present. Geocoding is best-effort — a miss just means no map.
+  let pickupLat = input.pickupLat ?? null;
+  let pickupLng = input.pickupLng ?? null;
+  if ((pickupLat == null || pickupLng == null) && input.pickupAddress.trim()) {
+    const g = await forwardGeocode(input.pickupAddress);
+    if (g) {
+      pickupLat = g.lat;
+      pickupLng = g.lng;
+    }
+  }
+
+  let dropoffLat: number | null = null;
+  let dropoffLng: number | null = null;
+  if (input.dropoffAddress?.trim()) {
+    const g = await forwardGeocode(input.dropoffAddress);
+    if (g) {
+      dropoffLat = g.lat;
+      dropoffLng = g.lng;
+    }
+  }
+
   const { data: ride, error } = await supabase
     .from("rides")
     .insert({
       driver_id: driver.id,
       rider_id: riderId,
       pickup_address: input.pickupAddress,
-      pickup_lat: input.pickupLat ?? null,
-      pickup_lng: input.pickupLng ?? null,
+      pickup_lat: pickupLat,
+      pickup_lng: pickupLng,
       dropoff_address: input.dropoffAddress ?? null,
+      dropoff_lat: dropoffLat,
+      dropoff_lng: dropoffLng,
       rider_notes: input.notes ?? null,
       base_fare_cents: fare.baseCents,
       discount_cents: fare.discountCents,
