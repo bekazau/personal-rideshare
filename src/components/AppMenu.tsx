@@ -174,6 +174,7 @@ export function AppMenu() {
 
         <ul className="flex-1 px-2 space-y-1">
           <MenuLink href="/driver/dashboard" onClick={() => setOpen(false)}>Home</MenuLink>
+          <MenuLink href="/driver/rides" onClick={() => setOpen(false)}>Rides</MenuLink>
           <MenuLink href="/driver/riders" onClick={() => setOpen(false)}>Riders</MenuLink>
           <MenuLink href="/driver/invite" onClick={() => setOpen(false)}>Invite link</MenuLink>
           <MenuLink href="/driver/settings" onClick={() => setOpen(false)}>Settings</MenuLink>

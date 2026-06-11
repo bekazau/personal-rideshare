@@ -18,6 +18,8 @@ import { formatUsd } from "@/lib/fare";
 import { TipSelector } from "@/components/TipSelector";
 import { PaymentMenu } from "@/components/PaymentMenu";
 import { AddressAutocomplete } from "@/components/AddressAutocomplete";
+import { RouteMap } from "@/components/RouteMap";
+import { RideEstimate } from "@/components/RideEstimate";
 import type { DriverRow, RideRow } from "@/lib/types/database";
 
 type RiderDriver = Pick<
@@ -553,6 +555,10 @@ function ActiveRideView({ ride }: { ride: RideRow }) {
       {ride.dropoff_address && (
         <p className="text-sm text-neutral-400">Dropoff: {ride.dropoff_address}</p>
       )}
+      {ride.pickup_lat != null && ride.dropoff_lat != null && (
+        <RouteMap rideId={ride.id} label={ride.pickup_address} />
+      )}
+      <RideEstimate rideId={ride.id} />
       {ride.total_cents > 0 && (
         <p className="text-sm text-neutral-400">Total: {formatUsd(ride.total_cents)}</p>
       )}
@@ -581,6 +587,10 @@ function QuoteConfirmCard({
       {ride.dropoff_address && (
         <p className="text-sm text-neutral-400">Dropoff: {ride.dropoff_address}</p>
       )}
+      {ride.pickup_lat != null && ride.dropoff_lat != null && (
+        <RouteMap rideId={ride.id} label={ride.pickup_address} />
+      )}
+      <RideEstimate rideId={ride.id} />
       <p className="text-xs text-neutral-500">You can add a tip when you pay.</p>
       <div className="grid grid-cols-2 gap-2">
         <button

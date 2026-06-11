@@ -109,6 +109,39 @@ export async function forwardGeocode(query: string): Promise<GeoPoint | null> {
   }
 }
 
+export interface DirectionsSummary {
+  durationSec: number;
+  distanceM: number;
+}
+
+// Driving duration + distance between two points via the Mapbox Directions
+// API. overview=false skips the route geometry — we only want the numbers.
+// Server-only.
+export async function getDirectionsSummary(
+  from: GeoPoint,
+  to: GeoPoint
+): Promise<DirectionsSummary | null> {
+  const token = process.env.MAPBOX_ACCESS_TOKEN;
+  if (!token) return null;
+
+  const url =
+    `https://api.mapbox.com/directions/v5/mapbox/driving/` +
+    `${from.lng},${from.lat};${to.lng},${to.lat}` +
+    `?overview=false&access_token=${encodeURIComponent(token)}`;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const data = (await res.json()) as {
+      routes?: { duration?: number; distance?: number }[];
+    };
+    const route = data.routes?.[0];
+    if (!route || route.duration == null || route.distance == null) return null;
+    return { durationSec: route.duration, distanceM: route.distance };
+  } catch {
+    return null;
+  }
+}
+
 export function staleness(updatedAtIso: string | null): string {
   if (!updatedAtIso) return "never seen";
   const minutes = Math.floor((Date.now() - new Date(updatedAtIso).getTime()) / 60_000);

@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { sendPushToUser } from "@/lib/push";
-import { forwardGeocode } from "@/lib/geo";
+import { forwardGeocode, getDirectionsSummary, type DirectionsSummary } from "@/lib/geo";
 import type { PaymentMethod, RideStatus } from "@/lib/types/database";
 
 async function getUserId(): Promise<string | null> {
@@ -191,6 +191,55 @@ export async function respondToQuote(rideId: string, accept: boolean) {
 
   revalidatePath("/driver/dashboard");
   return { ok: true };
+}
+
+// =============================================================================
+// Driving estimates for a ride (trip time, and optionally ETA to pickup)
+// =============================================================================
+export interface RideEstimateResult {
+  ok: true;
+  trip: DirectionsSummary | null;
+  pickup: DirectionsSummary | null;
+}
+
+export async function getRideEstimate(
+  rideId: string,
+  driverLat?: number,
+  driverLng?: number
+): Promise<RideEstimateResult | { error: string }> {
+  const userId = await getUserId();
+  if (!userId) return { error: "Not signed in." };
+
+  const supabase = await createClient();
+  const { data: ride } = await supabase
+    .from("rides")
+    .select("pickup_lat, pickup_lng, dropoff_lat, dropoff_lng")
+    .eq("id", rideId)
+    .maybeSingle();
+  if (!ride) return { error: "Ride not found." };
+
+  const { pickup_lat: plat, pickup_lng: plng, dropoff_lat: dlat, dropoff_lng: dlng } =
+    ride;
+
+  let trip: DirectionsSummary | null = null;
+  if (plat != null && plng != null && dlat != null && dlng != null) {
+    trip = await getDirectionsSummary({ lat: plat, lng: plng }, { lat: dlat, lng: dlng });
+  }
+
+  let pickup: DirectionsSummary | null = null;
+  if (
+    driverLat != null &&
+    driverLng != null &&
+    plat != null &&
+    plng != null
+  ) {
+    pickup = await getDirectionsSummary(
+      { lat: driverLat, lng: driverLng },
+      { lat: plat, lng: plng }
+    );
+  }
+
+  return { ok: true, trip, pickup };
 }
 
 // =============================================================================

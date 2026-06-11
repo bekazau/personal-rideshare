@@ -16,6 +16,7 @@ import { formatUsd } from "@/lib/fare";
 import { paymentOptionsForDriver } from "@/lib/payments";
 import { AppMenu } from "@/components/AppMenu";
 import { RouteMap } from "@/components/RouteMap";
+import { RideEstimate } from "@/components/RideEstimate";
 import type {
   DriverRow,
   DriverStatus,
@@ -378,6 +379,7 @@ function PendingRideCard({
       {ride.pickup_lat != null && ride.dropoff_lat != null && (
         <RouteMap rideId={ride.id} label={ride.pickup_address} />
       )}
+      <RideEstimate rideId={ride.id} />
 
       <div className="space-y-1">
         <label className="text-xs text-neutral-400">Your price for this ride</label>
@@ -451,7 +453,7 @@ function QuotedRideCard({
 
 const NEXT_LABEL: Partial<Record<RideStatus, { label: string; next: RideStatus }>> = {
   accepted: { label: "I'm on the way", next: "en_route" },
-  en_route: { label: "Arrived at pickup", next: "arrived" },
+  en_route: { label: "I've arrived", next: "arrived" },
   arrived: { label: "Start ride", next: "in_progress" },
   in_progress: { label: "Complete ride", next: "completed" },
 };
@@ -490,6 +492,7 @@ function ActiveRideCard({
       {ride.pickup_lat != null && ride.dropoff_lat != null && (
         <RouteMap rideId={ride.id} label={ride.pickup_address} />
       )}
+      <RideEstimate rideId={ride.id} withPickupEta={showNavToPickup} />
       {showNavToPickup && (
         <NavigateButton
           label="Navigate to pickup"

@@ -37,10 +37,13 @@ export async function GET(req: NextRequest) {
   // fails we still render the two pins, auto-fit, without a line.
   let pathOverlay: string | null = null;
   try {
+    // overview=simplified, not full: a full coast-to-coast polyline can be
+    // ~95k chars, which blows past the Static Images URL length limit (422).
+    // Simplified geometry is plenty of detail for a 600x300 preview.
     const dirUrl =
       `https://api.mapbox.com/directions/v5/mapbox/driving/` +
       `${plng},${plat};${dlng},${dlat}` +
-      `?geometries=polyline&overview=full&access_token=${encodeURIComponent(token)}`;
+      `?geometries=polyline&overview=simplified&access_token=${encodeURIComponent(token)}`;
     const dirRes = await fetch(dirUrl);
     if (dirRes.ok) {
       const dir = (await dirRes.json()) as { routes?: { geometry?: string }[] };
