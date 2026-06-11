@@ -323,6 +323,10 @@ export async function updateRideStatus(rideId: string, next: RideStatus) {
       url: `/ride/active/${rideId}`,
       kind: "ride_update",
       tag: `ride:${rideId}`,
+      // "Ride complete — tap to pay" should grab attention like a new request:
+      // requireInteraction keeps it persistent and, on Android, bumps it to a
+      // higher-priority heads-up that alerts audibly.
+      requireInteraction: next === "completed",
     });
   }
 
