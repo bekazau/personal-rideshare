@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { requestRide } from "@/app/actions/ride";
+import { requestRide, respondToQuote, setRideTip } from "@/app/actions/ride";
 import {
   pushSupported,
   registerServiceWorker,
@@ -14,9 +14,10 @@ import { pingRiderSeen, updateRiderName } from "@/app/actions/rider";
 import { RiderMenu } from "@/components/RiderMenu";
 import { DriverAreaMap } from "@/components/DriverAreaMap";
 import { getBrowserPosition } from "@/lib/geo";
-import { calculateFare, formatUsd } from "@/lib/fare";
+import { formatUsd } from "@/lib/fare";
 import { TipSelector } from "@/components/TipSelector";
 import { PaymentMenu } from "@/components/PaymentMenu";
+import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 import type { DriverRow, RideRow } from "@/lib/types/database";
 
 type RiderDriver = Pick<
@@ -176,63 +177,61 @@ export function RiderApp({ driver: initialDriver, rider: initialRider, initialAc
   }
 
   // ----- Ride request form ----------------------------------------------------
+  // Both addresses are picked from autocomplete, so each carries verified
+  // coordinates; the *Sel state is null until a suggestion is chosen.
   const [pickup, setPickup] = useState("");
+  const [pickupSel, setPickupSel] = useState<{ lat: number; lng: number } | null>(null);
   const [dropoff, setDropoff] = useState("");
+  const [dropoffSel, setDropoffSel] = useState<{ lat: number; lng: number } | null>(null);
   const [notes, setNotes] = useState("");
-  const [tipCents, setTipCents] = useState(0);
-  const [pickupLat, setPickupLat] = useState<number | null>(null);
-  const [pickupLng, setPickupLng] = useState<number | null>(null);
-  const [isFirstRide, setIsFirstRide] = useState(false);
+  const [when, setWhen] = useState<"now" | "later">("now");
+  const [scheduledFor, setScheduledFor] = useState(""); // datetime-local value
 
-  // On mount, check whether this would be the rider's first ride with this driver.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const supa = createClient();
-      const { count } = await supa
-        .from("rides")
-        .select("id", { count: "exact", head: true })
-        .eq("driver_id", driver.id)
-        .neq("status", "cancelled")
-        .neq("status", "declined");
-      if (cancelled) return;
-      setIsFirstRide((count ?? 0) === 0);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [driver.id]);
-
-  const fare = calculateFare({
-    baseFareCents: driver.base_fare_cents,
-    tipCents,
-    isFirstRide,
-    firstRideFreeOn: driver.first_ride_free_on,
-    firstRideDiscountPct: driver.first_ride_discount_pct,
-  });
+  // Bias address suggestions toward the driver's area when we know it.
+  // Memoized so AddressAutocomplete's effect (which depends on it) is stable.
+  const proximity = useMemo(
+    () =>
+      driver.last_lat != null && driver.last_lng != null
+        ? { lat: driver.last_lat, lng: driver.last_lng }
+        : null,
+    [driver.last_lat, driver.last_lng]
+  );
 
   async function useCurrentLocation() {
     try {
       const pos = await getBrowserPosition();
-      setPickupLat(pos.coords.latitude);
-      setPickupLng(pos.coords.longitude);
-      setPickup(`(${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)})`);
+      const lat = pos.coords.latitude;
+      const lng = pos.coords.longitude;
+      setPickupSel({ lat, lng });
+      setPickup(`My current location (${lat.toFixed(4)}, ${lng.toFixed(4)})`);
     } catch (e) {
       setError("Couldn't get your location: " + (e as Error).message);
     }
   }
 
+  const canSubmit = !!pickupSel && !!dropoffSel && (when === "now" || !!scheduledFor);
+
   function submitRequest() {
     setError(null);
+    if (!pickupSel || !dropoffSel) {
+      setError("Pick a pickup and dropoff from the suggestions.");
+      return;
+    }
+    if (when === "later" && !scheduledFor) {
+      setError("Choose a date and time for your scheduled ride.");
+      return;
+    }
     startTransition(async () => {
       const result = await requestRide({
         driverInviteCode: driver.invite_code,
         pickupAddress: pickup,
-        pickupLat: pickupLat ?? undefined,
-        pickupLng: pickupLng ?? undefined,
-        dropoffAddress: dropoff || undefined,
+        pickupLat: pickupSel.lat,
+        pickupLng: pickupSel.lng,
+        dropoffAddress: dropoff,
+        dropoffLat: dropoffSel.lat,
+        dropoffLng: dropoffSel.lng,
         notes: notes || undefined,
-        tipCents,
+        scheduledFor: when === "later" ? new Date(scheduledFor).toISOString() : null,
       });
       if (result.error) {
         setError(result.error);
@@ -247,9 +246,28 @@ export function RiderApp({ driver: initialDriver, rider: initialRider, initialAc
         .maybeSingle();
       if (data) setActiveRide(data as RideRow);
       setPickup("");
+      setPickupSel(null);
       setDropoff("");
+      setDropoffSel(null);
       setNotes("");
-      setTipCents(0);
+      setWhen("now");
+      setScheduledFor("");
+    });
+  }
+
+  function respondQuote(accept: boolean) {
+    if (!activeRide) return;
+    setError(null);
+    const rideId = activeRide.id;
+    startTransition(async () => {
+      const result = await respondToQuote(rideId, accept);
+      if (result.error) {
+        setError(result.error);
+        return;
+      }
+      const supa = createClient();
+      const { data } = await supa.from("rides").select("*").eq("id", rideId).maybeSingle();
+      if (data) setActiveRide(data as RideRow);
     });
   }
 
@@ -354,33 +372,47 @@ export function RiderApp({ driver: initialDriver, rider: initialRider, initialAc
         </section>
       )}
 
-      {/* Active ride */}
-      {activeRide && !showRequestForm && (
+      {/* Pending — waiting for the driver to send a price */}
+      {activeRide && activeRide.status === "pending" && (
         <ActiveRideView ride={activeRide} />
       )}
 
-      {/* Completed ride awaiting payment */}
+      {/* Quote — rider confirms or declines the driver's price */}
+      {activeRide && activeRide.status === "quoted" && (
+        <QuoteConfirmCard ride={activeRide} pending={pending} onRespond={respondQuote} />
+      )}
+
+      {/* Active ride (accepted onward, before completion) */}
+      {activeRide &&
+        ["accepted", "en_route", "arrived", "in_progress"].includes(activeRide.status) && (
+          <ActiveRideView ride={activeRide} />
+        )}
+
+      {/* Completed ride awaiting payment — rider chooses a tip, then pays */}
       {activeRide && activeRide.status === "completed" && !activeRide.paid_at && (
-        <section className="rounded-2xl bg-neutral-900 border border-neutral-800 p-4 space-y-3">
-          <h2 className="font-medium">Ride complete — please pay</h2>
-          <p className="text-sm text-neutral-400">
-            Tap your driver&apos;s preferred method.
-          </p>
-          <PaymentMenu driver={driver} totalCents={activeRide.total_cents} />
-        </section>
+        <RiderPayment ride={activeRide} driver={driver} />
       )}
 
       {/* Request form */}
       {showRequestForm && driver.status !== "offline" && (
         <section className="rounded-2xl bg-neutral-900 border border-neutral-800 p-4 space-y-3">
           <h2 className="font-medium">Request a ride</h2>
+
           <div className="space-y-1">
-            <label className="text-xs text-neutral-400">Pickup</label>
-            <input
-              className="input"
+            <AddressAutocomplete
+              label="Pickup"
+              placeholder="Search pickup address"
               value={pickup}
-              onChange={(e) => setPickup(e.target.value)}
-              placeholder="Where should they pick you up?"
+              selected={!!pickupSel}
+              onTextChange={(t) => {
+                setPickup(t);
+                setPickupSel(null);
+              }}
+              onSelect={(s) => {
+                setPickup(s.name);
+                setPickupSel({ lat: s.lat, lng: s.lng });
+              }}
+              proximity={proximity}
             />
             <button
               onClick={useCurrentLocation}
@@ -389,15 +421,60 @@ export function RiderApp({ driver: initialDriver, rider: initialRider, initialAc
               Use my current location
             </button>
           </div>
+
+          <AddressAutocomplete
+            label="Dropoff"
+            placeholder="Search dropoff address"
+            value={dropoff}
+            selected={!!dropoffSel}
+            onTextChange={(t) => {
+              setDropoff(t);
+              setDropoffSel(null);
+            }}
+            onSelect={(s) => {
+              setDropoff(s.name);
+              setDropoffSel({ lat: s.lat, lng: s.lng });
+            }}
+            proximity={proximity}
+          />
+
+          {/* When: now or scheduled */}
           <div className="space-y-1">
-            <label className="text-xs text-neutral-400">Dropoff (optional)</label>
-            <input
-              className="input"
-              value={dropoff}
-              onChange={(e) => setDropoff(e.target.value)}
-              placeholder="Where to?"
-            />
+            <label className="text-xs text-neutral-400">When</label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setWhen("now")}
+                className={`rounded-lg py-2 text-sm font-medium transition ${
+                  when === "now"
+                    ? "bg-white text-neutral-950"
+                    : "bg-neutral-800 text-neutral-300 hover:bg-neutral-700"
+                }`}
+              >
+                Now
+              </button>
+              <button
+                type="button"
+                onClick={() => setWhen("later")}
+                className={`rounded-lg py-2 text-sm font-medium transition ${
+                  when === "later"
+                    ? "bg-white text-neutral-950"
+                    : "bg-neutral-800 text-neutral-300 hover:bg-neutral-700"
+                }`}
+              >
+                For later
+              </button>
+            </div>
+            {when === "later" && (
+              <input
+                type="datetime-local"
+                className="input"
+                value={scheduledFor}
+                onChange={(e) => setScheduledFor(e.target.value)}
+              />
+            )}
           </div>
+
           <div className="space-y-1">
             <label className="text-xs text-neutral-400">Notes (optional)</label>
             <input
@@ -408,26 +485,20 @@ export function RiderApp({ driver: initialDriver, rider: initialRider, initialAc
             />
           </div>
 
-          <FareBreakdownView
-            baseCents={fare.baseCents}
-            discountCents={fare.discountCents}
-            tipCents={fare.tipCents}
-            totalCents={fare.totalCents}
-            isFirstRide={fare.isFirstRide && fare.discountCents > 0}
-          />
-
-          <TipSelector
-            baseFareCents={driver.base_fare_cents}
-            discountCents={fare.discountCents}
-            onChange={setTipCents}
-          />
+          <p className="text-xs text-neutral-500">
+            Your driver will review and send a price for you to confirm before the ride.
+          </p>
 
           <button
             onClick={submitRequest}
-            disabled={pending || !pickup.trim()}
+            disabled={pending || !canSubmit}
             className="w-full rounded-xl bg-white text-neutral-950 py-3 font-medium disabled:opacity-50"
           >
-            {pending ? "Sending request…" : `Request — ${formatUsd(fare.totalCents)}`}
+            {pending
+              ? "Sending request…"
+              : when === "later"
+                ? "Request scheduled ride"
+                : "Request ride"}
           </button>
         </section>
       )}
@@ -443,9 +514,27 @@ export function RiderApp({ driver: initialDriver, rider: initialRider, initialAc
   );
 }
 
+function formatSchedule(iso: string): string {
+  return new Date(iso).toLocaleString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function ScheduledBadge({ iso }: { iso: string }) {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/15 border border-amber-500/40 text-amber-300 text-xs font-medium px-2 py-0.5">
+      ⏰ Scheduled · {formatSchedule(iso)}
+    </span>
+  );
+}
+
 function ActiveRideView({ ride }: { ride: RideRow }) {
   const labels: Record<string, string> = {
-    pending: "Waiting for driver to accept…",
+    pending: "Waiting for your driver to send a price…",
     accepted: "Driver accepted — getting ready",
     en_route: "Driver is on the way",
     arrived: "Driver has arrived",
@@ -453,58 +542,97 @@ function ActiveRideView({ ride }: { ride: RideRow }) {
   };
   return (
     <section className="rounded-2xl bg-neutral-900 border border-emerald-900/40 p-4 space-y-2">
-      <p className="text-xs uppercase tracking-wider text-emerald-400">
-        {ride.status.replace("_", " ")}
-      </p>
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs uppercase tracking-wider text-emerald-400">
+          {ride.status.replace("_", " ")}
+        </p>
+        {ride.scheduled_for && <ScheduledBadge iso={ride.scheduled_for} />}
+      </div>
       <p className="font-medium">{labels[ride.status] || ride.status}</p>
-      <p className="text-sm text-neutral-400">
-        Pickup: {ride.pickup_address}
-      </p>
+      <p className="text-sm text-neutral-400">Pickup: {ride.pickup_address}</p>
       {ride.dropoff_address && (
         <p className="text-sm text-neutral-400">Dropoff: {ride.dropoff_address}</p>
       )}
-      <p className="text-sm text-neutral-400">
-        Total: {formatUsd(ride.total_cents)}
-      </p>
+      {ride.total_cents > 0 && (
+        <p className="text-sm text-neutral-400">Total: {formatUsd(ride.total_cents)}</p>
+      )}
     </section>
   );
 }
 
-function FareBreakdownView({
-  baseCents,
-  discountCents,
-  tipCents,
-  totalCents,
-  isFirstRide,
+function QuoteConfirmCard({
+  ride,
+  pending,
+  onRespond,
 }: {
-  baseCents: number;
-  discountCents: number;
-  tipCents: number;
-  totalCents: number;
-  isFirstRide: boolean;
+  ride: RideRow;
+  pending: boolean;
+  onRespond: (accept: boolean) => void;
 }) {
   return (
-    <div className="text-sm space-y-1 border-t border-neutral-800 pt-2">
-      <div className="flex justify-between">
-        <span className="text-neutral-400">Base fare</span>
-        <span>{formatUsd(baseCents)}</span>
+    <section className="rounded-2xl bg-neutral-900 border border-sky-900/50 p-4 space-y-3">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs uppercase tracking-wider text-sky-400">Quote</p>
+        {ride.scheduled_for && <ScheduledBadge iso={ride.scheduled_for} />}
       </div>
-      {isFirstRide && discountCents > 0 && (
-        <div className="flex justify-between text-emerald-400">
-          <span>First-ride discount</span>
-          <span>−{formatUsd(discountCents)}</span>
-        </div>
+      <p className="font-medium">Your driver quoted this ride at</p>
+      <p className="text-3xl font-semibold">{formatUsd(ride.base_fare_cents)}</p>
+      <p className="text-sm text-neutral-400">Pickup: {ride.pickup_address}</p>
+      {ride.dropoff_address && (
+        <p className="text-sm text-neutral-400">Dropoff: {ride.dropoff_address}</p>
       )}
-      {tipCents > 0 && (
+      <p className="text-xs text-neutral-500">You can add a tip when you pay.</p>
+      <div className="grid grid-cols-2 gap-2">
+        <button
+          onClick={() => onRespond(false)}
+          disabled={pending}
+          className="rounded-xl bg-neutral-800 text-neutral-300 py-2.5 font-medium hover:bg-neutral-700 disabled:opacity-50"
+        >
+          Decline
+        </button>
+        <button
+          onClick={() => onRespond(true)}
+          disabled={pending}
+          className="rounded-xl bg-emerald-500 text-neutral-950 py-2.5 font-medium hover:bg-emerald-400 disabled:opacity-50"
+        >
+          Confirm ride
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function RiderPayment({ ride, driver }: { ride: RideRow; driver: RiderDriver }) {
+  const [tipCents, setTipCents] = useState(0);
+  const total = ride.base_fare_cents + tipCents;
+
+  function changeTip(cents: number) {
+    setTipCents(cents);
+    // Persist the tip so the total/record reflects it; best-effort.
+    setRideTip(ride.id, cents).catch(() => {});
+  }
+
+  return (
+    <section className="rounded-2xl bg-neutral-900 border border-neutral-800 p-4 space-y-3">
+      <h2 className="font-medium">Ride complete — please pay</h2>
+      <div className="text-sm space-y-1 border-t border-neutral-800 pt-2">
         <div className="flex justify-between">
-          <span className="text-neutral-400">Tip</span>
-          <span>{formatUsd(tipCents)}</span>
+          <span className="text-neutral-400">Ride</span>
+          <span>{formatUsd(ride.base_fare_cents)}</span>
         </div>
-      )}
-      <div className="flex justify-between font-medium pt-1 border-t border-neutral-800">
-        <span>Total</span>
-        <span>{formatUsd(totalCents)}</span>
+        {tipCents > 0 && (
+          <div className="flex justify-between">
+            <span className="text-neutral-400">Tip</span>
+            <span>{formatUsd(tipCents)}</span>
+          </div>
+        )}
+        <div className="flex justify-between font-medium pt-1 border-t border-neutral-800">
+          <span>Total</span>
+          <span>{formatUsd(total)}</span>
+        </div>
       </div>
-    </div>
+      <TipSelector baseFareCents={ride.base_fare_cents} discountCents={0} onChange={changeTip} />
+      <PaymentMenu driver={driver} totalCents={total} />
+    </section>
   );
 }

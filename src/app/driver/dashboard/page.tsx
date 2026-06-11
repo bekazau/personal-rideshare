@@ -22,7 +22,7 @@ export default async function DriverDashboard() {
     .from("rides")
     .select("*")
     .eq("driver_id", userId)
-    .in("status", ["pending", "accepted", "en_route", "arrived", "in_progress", "completed"])
+    .in("status", ["pending", "quoted", "accepted", "en_route", "arrived", "in_progress", "completed"])
     .order("requested_at", { ascending: false })
     .limit(20);
 

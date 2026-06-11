@@ -4,6 +4,7 @@
 
 export type RideStatus =
   | "pending"
+  | "quoted"
   | "accepted"
   | "en_route"
   | "arrived"
@@ -75,6 +76,7 @@ export interface RideRow {
   is_first_ride: boolean;
   payment_method: PaymentMethod;
   paid_at: string | null;
+  scheduled_for: string | null;
   requested_at: string;
   accepted_at: string | null;
   completed_at: string | null;

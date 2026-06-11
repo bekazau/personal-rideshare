@@ -3,7 +3,6 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { sendPushToUser } from "@/lib/push";
-import { calculateFare } from "@/lib/fare";
 import { forwardGeocode } from "@/lib/geo";
 import type { PaymentMethod, RideStatus } from "@/lib/types/database";
 
@@ -14,38 +13,41 @@ async function getUserId(): Promise<string | null> {
 }
 
 // =============================================================================
-// Rider → driver: request a ride
+// Rider → driver: request a ride (no price yet — the driver quotes it)
 // =============================================================================
 export interface RideRequestInput {
   driverInviteCode: string;
   pickupAddress: string;
-  pickupLat?: number;
-  pickupLng?: number;
-  dropoffAddress?: string;
+  pickupLat: number;
+  pickupLng: number;
+  dropoffAddress: string;
+  dropoffLat: number;
+  dropoffLng: number;
   notes?: string;
-  tipCents: number;
+  // ISO timestamp when the ride is scheduled for; omit/null = "now".
+  scheduledFor?: string | null;
 }
 
 export async function requestRide(input: RideRequestInput) {
   const riderId = await getUserId();
   if (!riderId) return { error: "Not signed in." };
   if (!input.pickupAddress.trim()) return { error: "Pickup address is required." };
+  if (!input.dropoffAddress.trim()) return { error: "Dropoff address is required." };
 
   const supabase = await createClient();
 
   // Find driver by invite code.
   const { data: driver } = await supabase
     .from("drivers")
-    .select(
-      "id, base_fare_cents, first_ride_free_on, first_ride_discount_pct, status"
-    )
+    .select("id, status")
     .eq("invite_code", input.driverInviteCode)
     .maybeSingle();
 
   if (!driver) return { error: "Driver not found." };
   if (driver.status === "offline") return { error: "Driver is offline." };
 
-  // Is this the rider's first ride with this driver?
+  // Is this the rider's first ride with this driver? (Shown to the driver as a
+  // hint when they quote — there's no automatic discount anymore.)
   const { count: priorRides } = await supabase
     .from("rides")
     .select("id", { count: "exact", head: true })
@@ -56,37 +58,22 @@ export async function requestRide(input: RideRequestInput) {
 
   const isFirstRide = (priorRides ?? 0) === 0;
 
-  const fare = calculateFare({
-    baseFareCents: driver.base_fare_cents,
-    tipCents: input.tipCents,
-    isFirstRide,
-    firstRideFreeOn: driver.first_ride_free_on,
-    firstRideDiscountPct: driver.first_ride_discount_pct,
-  });
-
-  // Resolve coordinates so the driver can be shown a pickup→dropoff route map.
-  // Pickup may already have exact coords (rider tapped "use my current
-  // location"); otherwise geocode the typed address. Dropoff is text-only, so
-  // geocode it when present. Geocoding is best-effort — a miss just means no map.
-  let pickupLat = input.pickupLat ?? null;
-  let pickupLng = input.pickupLng ?? null;
-  if ((pickupLat == null || pickupLng == null) && input.pickupAddress.trim()) {
+  // Coordinates come from the address autocomplete; fall back to geocoding the
+  // text just in case (so the driver's route map always has points).
+  let pickupLat: number | null = input.pickupLat ?? null;
+  let pickupLng: number | null = input.pickupLng ?? null;
+  if (pickupLat == null || pickupLng == null) {
     const g = await forwardGeocode(input.pickupAddress);
-    if (g) {
-      pickupLat = g.lat;
-      pickupLng = g.lng;
-    }
+    if (g) ({ lat: pickupLat, lng: pickupLng } = g);
+  }
+  let dropoffLat: number | null = input.dropoffLat ?? null;
+  let dropoffLng: number | null = input.dropoffLng ?? null;
+  if (dropoffLat == null || dropoffLng == null) {
+    const g = await forwardGeocode(input.dropoffAddress);
+    if (g) ({ lat: dropoffLat, lng: dropoffLng } = g);
   }
 
-  let dropoffLat: number | null = null;
-  let dropoffLng: number | null = null;
-  if (input.dropoffAddress?.trim()) {
-    const g = await forwardGeocode(input.dropoffAddress);
-    if (g) {
-      dropoffLat = g.lat;
-      dropoffLng = g.lng;
-    }
-  }
+  const scheduledFor = input.scheduledFor?.trim() || null;
 
   const { data: ride, error } = await supabase
     .from("rides")
@@ -96,13 +83,15 @@ export async function requestRide(input: RideRequestInput) {
       pickup_address: input.pickupAddress,
       pickup_lat: pickupLat,
       pickup_lng: pickupLng,
-      dropoff_address: input.dropoffAddress ?? null,
+      dropoff_address: input.dropoffAddress,
       dropoff_lat: dropoffLat,
       dropoff_lng: dropoffLng,
       rider_notes: input.notes ?? null,
-      base_fare_cents: fare.baseCents,
-      discount_cents: fare.discountCents,
-      tip_cents: fare.tipCents,
+      scheduled_for: scheduledFor,
+      // No price yet — the driver sends a quote. total_cents stays 0 until then.
+      base_fare_cents: 0,
+      discount_cents: 0,
+      tip_cents: 0,
       is_first_ride: isFirstRide,
     })
     .select("id")
@@ -112,8 +101,8 @@ export async function requestRide(input: RideRequestInput) {
 
   // Fire-and-wait: ride is already created, push is best-effort.
   await sendPushToUser(driver.id, {
-    title: "New ride request",
-    body: `Pickup: ${input.pickupAddress}`,
+    title: scheduledFor ? "New ride request (scheduled)" : "New ride request",
+    body: `${input.pickupAddress} → ${input.dropoffAddress}`,
     url: "/driver/dashboard",
     kind: "new_ride",
     tag: `ride:${ride.id}`,
@@ -125,10 +114,112 @@ export async function requestRide(input: RideRequestInput) {
 }
 
 // =============================================================================
+// Driver → rider: send a price quote; rider confirms or declines
+// =============================================================================
+export async function sendQuote(rideId: string, amountCents: number) {
+  const driverId = await getUserId();
+  if (!driverId) return { error: "Not signed in." };
+  if (!Number.isInteger(amountCents) || amountCents <= 0) {
+    return { error: "Enter a valid price." };
+  }
+
+  const supabase = await createClient();
+  const { data: ride } = await supabase
+    .from("rides")
+    .select("status, driver_id, rider_id")
+    .eq("id", rideId)
+    .maybeSingle();
+
+  if (!ride) return { error: "Ride not found." };
+  if (ride.driver_id !== driverId) return { error: "Not your ride." };
+  if (ride.status !== "pending") return { error: "This request can no longer be quoted." };
+
+  const { error } = await supabase
+    .from("rides")
+    .update({ base_fare_cents: amountCents, status: "quoted" })
+    .eq("id", rideId);
+  if (error) return { error: error.message };
+
+  // Build a rider-facing URL via the driver's invite code.
+  const { data: driver } = await supabase
+    .from("drivers")
+    .select("invite_code")
+    .eq("id", driverId)
+    .maybeSingle();
+  await sendPushToUser(ride.rider_id, {
+    title: "Your driver sent a price",
+    body: `Tap to review and confirm your ride.`,
+    url: driver?.invite_code ? `/ride/${driver.invite_code}` : "/",
+    kind: "ride_update",
+    tag: `ride:${rideId}`,
+    requireInteraction: true,
+  });
+
+  revalidatePath("/driver/dashboard");
+  return { ok: true };
+}
+
+export async function respondToQuote(rideId: string, accept: boolean) {
+  const riderId = await getUserId();
+  if (!riderId) return { error: "Not signed in." };
+
+  const supabase = await createClient();
+  const { data: ride } = await supabase
+    .from("rides")
+    .select("status, driver_id, rider_id")
+    .eq("id", rideId)
+    .maybeSingle();
+
+  if (!ride) return { error: "Ride not found." };
+  if (ride.rider_id !== riderId) return { error: "Not your ride." };
+  if (ride.status !== "quoted") return { error: "This quote is no longer open." };
+
+  const patch = accept
+    ? { status: "accepted" as const, accepted_at: new Date().toISOString() }
+    : { status: "declined" as const, cancelled_at: new Date().toISOString() };
+
+  const { error } = await supabase.from("rides").update(patch).eq("id", rideId);
+  if (error) return { error: error.message };
+
+  await sendPushToUser(ride.driver_id, {
+    title: accept ? "Ride confirmed" : "Rider declined the quote",
+    body: "",
+    url: "/driver/dashboard",
+    kind: "ride_update",
+    tag: `ride:${rideId}`,
+  });
+
+  revalidatePath("/driver/dashboard");
+  return { ok: true };
+}
+
+// =============================================================================
+// Rider sets a tip at payment time (total = quote + tip)
+// =============================================================================
+export async function setRideTip(rideId: string, tipCents: number) {
+  const riderId = await getUserId();
+  if (!riderId) return { error: "Not signed in." };
+  if (!Number.isInteger(tipCents) || tipCents < 0) return { error: "Invalid tip." };
+
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("rides")
+    .update({ tip_cents: tipCents })
+    .eq("id", rideId)
+    .eq("rider_id", riderId);
+
+  if (error) return { error: error.message };
+  return { ok: true };
+}
+
+// =============================================================================
 // Driver → ride state machine
 // =============================================================================
 const ALLOWED_TRANSITIONS: Record<RideStatus, RideStatus[]> = {
-  pending: ["accepted", "declined", "cancelled"],
+  // pending → quoted happens via sendQuote; quoted → accepted/declined via
+  // respondToQuote. The driver can still decline/cancel at either stage.
+  pending: ["declined", "cancelled"],
+  quoted: ["declined", "cancelled"],
   accepted: ["en_route", "cancelled"],
   en_route: ["arrived", "cancelled"],
   arrived: ["in_progress", "cancelled"],

@@ -93,7 +93,7 @@ export default async function RiderPage({ params }: PageProps) {
     .select("*")
     .eq("driver_id", driver.id)
     .eq("rider_id", userId)
-    .in("status", ["pending", "accepted", "en_route", "arrived", "in_progress", "completed"])
+    .in("status", ["pending", "quoted", "accepted", "en_route", "arrived", "in_progress", "completed"])
     .order("requested_at", { ascending: false })
     .limit(1)
     .maybeSingle();

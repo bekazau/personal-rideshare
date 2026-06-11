@@ -9,6 +9,7 @@ import {
 import {
   updateRideStatus,
   markRidePaid,
+  sendQuote,
 } from "@/app/actions/ride";
 import { getBrowserPosition, staleness } from "@/lib/geo";
 import { formatUsd } from "@/lib/fare";
@@ -138,6 +139,14 @@ export function DashboardClient({ driver: initialDriver, initialRides }: Props) 
     });
   }
 
+  async function quoteRide(rideId: string, amountCents: number) {
+    setError(null);
+    startTransition(async () => {
+      const r = await sendQuote(rideId, amountCents);
+      if (r.error) setError(r.error);
+    });
+  }
+
   async function recordPayment(rideId: string, method: PaymentMethod) {
     setError(null);
     startTransition(async () => {
@@ -150,6 +159,7 @@ export function DashboardClient({ driver: initialDriver, initialRides }: Props) 
     ["accepted", "en_route", "arrived", "in_progress"].includes(r.status)
   );
   const pendingRides = rides.filter((r) => r.status === "pending");
+  const quotedRides = rides.filter((r) => r.status === "quoted");
   const recentlyCompleted = rides.filter(
     (r) => r.status === "completed" && !r.paid_at
   );
@@ -173,8 +183,25 @@ export function DashboardClient({ driver: initialDriver, initialRides }: Props) 
             <PendingRideCard
               key={ride.id}
               ride={ride}
-              onAccept={() => transitionRide(ride.id, "accepted")}
+              pending={pending}
+              suggestedCents={driver.base_fare_cents}
+              onQuote={(cents) => quoteRide(ride.id, cents)}
               onDecline={() => transitionRide(ride.id, "declined")}
+            />
+          ))}
+        </section>
+      )}
+
+      {quotedRides.length > 0 && (
+        <section className="space-y-2">
+          <h2 className="text-sm font-medium text-neutral-300">
+            Waiting for confirmation
+          </h2>
+          {quotedRides.map((ride) => (
+            <QuotedRideCard
+              key={ride.id}
+              ride={ride}
+              onCancel={() => transitionRide(ride.id, "cancelled")}
             />
           ))}
         </section>
@@ -282,17 +309,57 @@ function StatusButton({
   );
 }
 
+function formatSchedule(iso: string): string {
+  return new Date(iso).toLocaleString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function SchedBadge({ iso }: { iso: string }) {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/20 border border-amber-500/50 text-amber-300 text-xs font-semibold px-2 py-0.5">
+      ⏰ FOR LATER · {formatSchedule(iso)}
+    </span>
+  );
+}
+
 function PendingRideCard({
   ride,
-  onAccept,
+  pending,
+  suggestedCents,
+  onQuote,
   onDecline,
 }: {
   ride: RideRow;
-  onAccept: () => void;
+  pending: boolean;
+  suggestedCents: number;
+  onQuote: (cents: number) => void;
   onDecline: () => void;
 }) {
+  const [price, setPrice] = useState(
+    suggestedCents > 0 ? (suggestedCents / 100).toFixed(2) : ""
+  );
+  const cents = Math.round(Number(price || "0") * 100);
+  const valid = Number.isFinite(cents) && cents > 0;
+
+  // Scheduled requests get a loud amber border so they're unmistakable.
+  const scheduled = !!ride.scheduled_for;
+
   return (
-    <div className="rounded-2xl bg-neutral-900 border border-amber-900/40 p-4 space-y-3">
+    <div
+      className={`rounded-2xl bg-neutral-900 p-4 space-y-3 border ${
+        scheduled ? "border-amber-500/60" : "border-amber-900/40"
+      }`}
+    >
+      {scheduled && ride.scheduled_for && (
+        <div>
+          <SchedBadge iso={ride.scheduled_for} />
+        </div>
+      )}
       <div className="flex justify-between items-start gap-2">
         <div className="space-y-1">
           <p className="font-medium">{ride.pickup_address}</p>
@@ -303,30 +370,81 @@ function PendingRideCard({
             <p className="text-xs text-neutral-500 italic">&ldquo;{ride.rider_notes}&rdquo;</p>
           )}
         </div>
-        <div className="text-right">
-          <p className="font-semibold">{formatUsd(ride.total_cents)}</p>
-          {ride.is_first_ride && ride.discount_cents > 0 && (
-            <p className="text-xs text-emerald-400">First ride discount</p>
-          )}
-        </div>
+        {ride.is_first_ride && (
+          <span className="text-xs text-emerald-400 shrink-0">First ride</span>
+        )}
       </div>
+
       {ride.pickup_lat != null && ride.dropoff_lat != null && (
         <RouteMap rideId={ride.id} label={ride.pickup_address} />
       )}
+
+      <div className="space-y-1">
+        <label className="text-xs text-neutral-400">Your price for this ride</label>
+        <div className="flex items-center gap-2 rounded-xl bg-neutral-800 px-3">
+          <span className="text-neutral-400">$</span>
+          <input
+            type="number"
+            min="0"
+            step="0.50"
+            inputMode="decimal"
+            value={price}
+            onChange={(e) => setPrice(e.target.value)}
+            placeholder="0.00"
+            className="flex-1 bg-transparent py-2 outline-none"
+          />
+        </div>
+      </div>
+
       <div className="grid grid-cols-2 gap-2">
         <button
           onClick={onDecline}
-          className="rounded-xl bg-neutral-800 text-neutral-300 py-2 font-medium hover:bg-neutral-700"
+          disabled={pending}
+          className="rounded-xl bg-neutral-800 text-neutral-300 py-2 font-medium hover:bg-neutral-700 disabled:opacity-50"
         >
           Decline
         </button>
         <button
-          onClick={onAccept}
-          className="rounded-xl bg-emerald-500 text-neutral-950 py-2 font-medium hover:bg-emerald-400"
+          onClick={() => onQuote(cents)}
+          disabled={pending || !valid}
+          className="rounded-xl bg-emerald-500 text-neutral-950 py-2 font-medium hover:bg-emerald-400 disabled:opacity-50"
         >
-          Accept
+          Send quote
         </button>
       </div>
+    </div>
+  );
+}
+
+function QuotedRideCard({
+  ride,
+  onCancel,
+}: {
+  ride: RideRow;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="rounded-2xl bg-neutral-900 border border-sky-900/50 p-4 space-y-2">
+      <div className="flex justify-between items-start gap-2">
+        <div className="space-y-1">
+          <p className="font-medium">{ride.pickup_address}</p>
+          {ride.dropoff_address && (
+            <p className="text-sm text-neutral-400">→ {ride.dropoff_address}</p>
+          )}
+        </div>
+        <div className="text-right shrink-0">
+          <p className="font-semibold">{formatUsd(ride.base_fare_cents)}</p>
+          <p className="text-xs text-sky-400">Quote sent</p>
+        </div>
+      </div>
+      {ride.scheduled_for && <SchedBadge iso={ride.scheduled_for} />}
+      <p className="text-xs text-neutral-500">Waiting for the rider to confirm…</p>
+      <button
+        onClick={onCancel}
+        className="w-full text-xs text-neutral-500 underline"
+      >
+        Cancel this request
+      </button>
     </div>
   );
 }
@@ -352,6 +470,11 @@ function ActiveRideCard({
   const showNavToDropoff = ride.status === "in_progress" && !!ride.dropoff_address;
   return (
     <section className="rounded-2xl bg-neutral-900 border border-emerald-900/40 p-4 space-y-3">
+      {ride.scheduled_for && (
+        <div>
+          <SchedBadge iso={ride.scheduled_for} />
+        </div>
+      )}
       <div className="flex justify-between items-start gap-2">
         <div className="space-y-1">
           <p className="text-xs uppercase tracking-wider text-emerald-400">
