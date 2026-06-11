@@ -1,6 +1,46 @@
-# Status — Tier 1 MVP build
+# Status
 
-**Last updated:** 2026-05-27 (autonomous build session)
+**Last updated:** 2026-06-11
+
+> ## Current state (2026-06-11)
+>
+> Live and deployed (Vercel auto-deploys on push to `master`). Far past the
+> Tier 1 notes below, which are kept for historical context.
+>
+> **Ride lifecycle:** rider requests with verified pickup+dropoff from address
+> autocomplete (no price) → `pending` → driver sends a price **quote** →
+> `quoted` → rider **Confirms/Declines** → `accepted` → en_route → arrived →
+> in_progress → completed → rider pays and **adds a tip at payment**
+> (total = quote + tip). Server actions: `sendQuote`, `respondToQuote`,
+> `setRideTip`, `getRideEstimate` in `src/app/actions/ride.ts`.
+>
+> **Built since Tier 1:**
+> - Address/business autocomplete via Mapbox **Search Box API**
+>   (`/api/geocode` + `/api/geocode/retrieve`, `AddressAutocomplete.tsx`).
+> - **Now / For-later** scheduling (`rides.scheduled_for`) with a prominent
+>   "FOR LATER" badge for the driver.
+> - Maps proxied server-side (no client token): rider area map
+>   (`/api/area-map`), fullscreen Leaflet map (`/api/map-tiles`), and
+>   pickup→dropoff **route previews** on driver + rider cards
+>   (`/api/route-map`, Directions `overview=simplified`).
+> - **ETAs** (trip time/distance + driver ETA-to-pickup) via `RideEstimate.tsx`.
+> - Driver **Rides** history page (`/driver/rides`) + menu link.
+> - Tier 2: in-app chat, per-rider list/detail, settings, invite page.
+>
+> **DB migrations:** 0001–0006 applied to the live Supabase project. 0006
+> added the `quoted` status, `scheduled_for`, and `base_fare_cents` default 0.
+>
+> **Local build note:** set `NODE_OPTIONS=--max-old-space-size=6144` before
+> `npm run build` or it can OOM. `tsc`, `eslint`, `vitest` (27 tests) all pass.
+>
+> **Not built yet:** scheduled-ride reminder push near pickup time; rider
+> quote counter-offer; SMS fallback (Twilio); saved Home/Work addresses (table
+> exists, no UI); "riders online" presence badge. The old first-ride
+> auto-discount was removed — the driver just sees a "First ride" hint.
+
+---
+
+## Historical — Tier 1 MVP build (2026-05-27)
 
 ## What's working
 
